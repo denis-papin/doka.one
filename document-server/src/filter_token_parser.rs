@@ -1,7 +1,9 @@
 use std::cell::RefCell;
+use std::fmt;
 use std::ops::Add;
 
 use log::warn;
+use crate::filter_token_parser::FilterValue::{ValueInt, ValueString};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ComparisonOperator {
@@ -20,6 +22,20 @@ pub(crate) enum FilterValue {
     ValueString(String),
 }
 
+impl fmt::Display for FilterValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValueInt(i) => {
+                write!(f, "{}", i)
+            }
+            ValueString(s) => {
+                write!(f, "\"{}\"", s.as_str())
+            }
+        }
+
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum LogicalOperator {
     AND,
@@ -34,9 +50,11 @@ pub(crate) enum FilterExpression {
         value: FilterValue,
     },
     Logical {
-        left: Box<FilterExpression>,
+        // TODO replace left and right with a list of Box<FilterExpression>
+        // left: Box<FilterExpression>,
         operator: LogicalOperator,
-        right: Box<FilterExpression>,
+        // right: Box<FilterExpression>,
+        leaves: Vec<Box<FilterExpression>>,
     },
 }
 
@@ -66,23 +84,24 @@ pub(crate) enum TokenParseError {
     ClosingExpected((usize, Option<Token>)),
 }
 
-fn to_canonical_form(filter_expression : &FilterExpression) -> Result<String, TokenParseError> {
+pub (crate) fn to_canonical_form(filter_expression : &FilterExpression) -> Result<String, TokenParseError> {
     let mut content : String = String::from("");
     match filter_expression {
         FilterExpression::Condition { attribute, operator, value } => {
-            let s = format!("({:?}<{:?}>{:?})", attribute, operator, value);
+            let s = format!("({}<{:?}>{})", attribute, operator, value);
             content.push_str(&s);
         }
-        FilterExpression::Logical {  left, operator, right } => {
+        FilterExpression::Logical {  operator, leaves } => {
             content.push_str("{");
-            let r_left_content = to_canonical_form(left);
-            if let Ok(left) = r_left_content {
-                content.push_str(&left);
-            }
-            content.push_str(&format!("{:?}", &operator));
-            let r_right_content = to_canonical_form(right);
-            if let Ok(right) = r_right_content {
-                content.push_str(&right);
+
+            for (i,l) in leaves.iter().enumerate() {
+                let r_leaf_content = to_canonical_form(l);
+                if let Ok(leaf) = r_leaf_content {
+                    content.push_str(&leaf);
+                }
+                if i < leaves.len() - 1  {
+                    content.push_str(&format!("{:?}", &operator));
+                }
             }
             content.push_str("}");
         }
@@ -104,19 +123,20 @@ pub (crate) fn to_sql_form(filter_expression : &FilterExpression) -> Result<Stri
                 ComparisonOperator::LIKE => {"LIKE"}
             };
 
-            let s = format!("(\"{:?}\" {:?} {:?})", attribute, sql_op, value);
+            let s = format!("({} {} {})", attribute, sql_op, value);
             content.push_str(&s);
         }
-        FilterExpression::Logical {  left, operator, right } => {
+        FilterExpression::Logical { operator, leaves } => {
             content.push_str("(");
-            let r_left_content = to_sql_form(left);
-            if let Ok(left) = r_left_content {
-                content.push_str(&left);
-            }
-            content.push_str(&format!("{:?}", &operator));
-            let r_right_content = to_sql_form(right);
-            if let Ok(right) = r_right_content {
-                content.push_str(&right);
+
+            for (i,l) in leaves.iter().enumerate() {
+                let r_leaf_content = to_sql_form(l);
+                if let Ok(leaf) = r_leaf_content {
+                    content.push_str(&leaf);
+                }
+                if i < leaves.len() - 1  {
+                    content.push_str(&format!(" {:?} ", &operator));
+                }
             }
             content.push_str(")");
         }
@@ -124,6 +144,7 @@ pub (crate) fn to_sql_form(filter_expression : &FilterExpression) -> Result<Stri
     Ok(content)
 }
 
+/// Parse a list of tokens to create the FilterExpression (AST)
 pub(crate) fn parse_expression(tokens: &[Token]) -> Result<Box<FilterExpression>, TokenParseError> {
     let index = RefCell::new(0usize);
     parse_expression_with_index(&tokens, &index)
@@ -212,9 +233,10 @@ fn parse_logical(tokens: &[Token], index: &RefCell<usize>) -> Result<Box<FilterE
 
                 if let Some(Token::LogicalClose) = t {
                     Ok(Box::new(FilterExpression::Logical {
-                        left,
+                        //left,
                         operator,
-                        right,
+                        //right,
+                        leaves: vec![left, right],
                     }))
                 } else {
                     warn!("Expected logical closing");
@@ -352,7 +374,7 @@ mod tests {
 
     use std::cell::RefCell;
 
-    use crate::filter_token_parser::{ComparisonOperator, LogicalOperator, parse_expression_with_index, to_canonical_form, Token, TokenParseError};
+    use crate::filter_token_parser::{ComparisonOperator, LogicalOperator, parse_expression_with_index, to_canonical_form, to_sql_form, Token, TokenParseError};
     use crate::filter_token_parser::ComparisonOperator::LIKE;
     use crate::filter_token_parser::LogicalOperator::{AND, OR};
     use crate::filter_token_parser::Token::{Attribute, BinaryLogicalOperator, ConditionClose, ConditionOpen, LogicalClose, LogicalOpen, Operator, ValueInt, ValueString};
@@ -379,7 +401,7 @@ mod tests {
             ConditionOpen, // {{( attribut1 GT 10 ) AND ( attribut2 EQ "bonjour" )) OR (
             Attribute(String::from("attribut3")), // {{( attribut1 GT 10 ) AND ( attribut2 EQ "bonjour" )) OR ( attribut3
             Operator(ComparisonOperator::LIKE), // {{( attribut1 GT 10 ) AND ( attribut2 EQ "bonjour" )) OR ( attribut3 LIKE
-            ValueString(String::from("\"den%\"")), // {{( attribut1 GT 10 ) AND ( attribut2 EQ "bonjour" )) OR ( attribut3 LIkE "den%"
+            ValueString(String::from("den%")), // {{( attribut1 GT 10 ) AND ( attribut2 EQ "bonjour" )) OR ( attribut3 LIkE "den%"
             ConditionClose, // {{( attribut1 GT 10 ) AND ( attribut2 EQ "bonjour" )) OR ( attribut3 LIKE "den%" )
             LogicalClose, // {{( attribut1 GT 10 ) AND ( attribut2 EQ "bonjour" )) OR ( attribut3 LIKE "den%" )}
         ];
@@ -394,7 +416,7 @@ mod tests {
             },
         };
 
-        const EXPECTED : &str = r#"{{("attribut1"<GT>ValueInt(10))AND("attribut2"<EQ>ValueString("\nbonjour\n"))}OR("attribut3"<LIKE>ValueString("\"den%\""))}"#;
+        const EXPECTED : &str = "{{(attribut1<GT>10)AND(attribut2<EQ>\"\nbonjour\n\")}OR(attribut3<LIKE>\"den%\")}";
         assert_eq!(EXPECTED, canonical);
     }
 
@@ -421,7 +443,7 @@ mod tests {
             },
         };
 
-        const EXPECTED : &str = r#"("A"<LIKE>ValueInt(10))"#;
+        const EXPECTED : &str = "(A<LIKE>10)";
         assert_eq!(EXPECTED, canonical);
     }
 
@@ -472,7 +494,7 @@ mod tests {
             },
         };
 
-        const EXPECTED : &str = r#"{{("A"<LIKE>ValueInt(10))OR("B"<EQ>ValueInt(45))}AND{("K"<EQ>ValueString("victory"))OR("K"<LT>ValueInt(12))}}"#;
+        const EXPECTED : &str = "{{(A<LIKE>10)OR(B<EQ>45)}AND{(K<EQ>\"victory\")OR(K<LT>12)}}";
         assert_eq!(EXPECTED, canonical);
     }
 
@@ -647,6 +669,48 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    pub fn to_sql_test() {
+        // {{( attribut1 GT 10 ) AND ( attribut2 EQ "bonjour" )) OR ( attribut3 LIKE "den%" )}
+        let tokens = vec![
+            LogicalOpen, // {
+            LogicalOpen, // {{
+            ConditionOpen, // {{(
+            Attribute(String::from("attribut1")), // {{( attribut1
+            Operator(ComparisonOperator::GT), // {{( attribut1 GT
+            ValueInt(10), // {{( attribut1 GT 10
+            ConditionClose, // {{( attribut1 GT 10 )
+            BinaryLogicalOperator(AND), // {{( attribut1 GT 10 ) AND
+            ConditionOpen, // {{( attribut1 GT 10 ) AND (
+            Attribute(String::from("attribut2")), // {{( attribut1 GT 10 ) AND ( attribut2
+            Operator(ComparisonOperator::EQ), // {{( attribut1 GT 10 ) AND ( attribut2 EQ
+            ValueString(String::from("bonjour")),  // {{( attribut1 GT 10 ) AND ( attribut2 EQ "bonjour"
+            ConditionClose, // {{( attribut1 GT 10 ) AND ( attribut2 EQ "bonjour" )
+            LogicalClose, // {( attribut1 GT 10 ) AND ( attribut2 EQ "bonjour" )}
+            BinaryLogicalOperator(OR), // {{( attribut1 GT 10 ) AND ( attribut2 EQ "bonjour" )) OR
+            ConditionOpen, // {{( attribut1 GT 10 ) AND ( attribut2 EQ "bonjour" )) OR (
+            Attribute(String::from("attribut3")), // {{( attribut1 GT 10 ) AND ( attribut2 EQ "bonjour" )) OR ( attribut3
+            Operator(ComparisonOperator::LIKE), // {{( attribut1 GT 10 ) AND ( attribut2 EQ "bonjour" )) OR ( attribut3 LIKE
+            ValueString(String::from("den%")), // {{( attribut1 GT 10 ) AND ( attribut2 EQ "bonjour" )) OR ( attribut3 LIkE "den%"
+            ConditionClose, // {{( attribut1 GT 10 ) AND ( attribut2 EQ "bonjour" )) OR ( attribut3 LIKE "den%" )
+            LogicalClose, // {{( attribut1 GT 10 ) AND ( attribut2 EQ "bonjour" )) OR ( attribut3 LIKE "den%" )}
+        ];
+        let index = RefCell::new(0usize);
+        let sql = match parse_expression_with_index(&tokens, &index) {
+            Ok(expression) => {
+                to_sql_form(&expression).unwrap()
+            },
+            Err(err) => {
+                println!("Error: {:?}", err);
+                panic!()
+            },
+        };
+
+        println!(">>>> SQL {}", sql);
+        // const EXPECTED : &str = r#"{{("attribut1"<GT>ValueInt(10))AND("attribut2"<EQ>ValueString("\nbonjour\n"))}OR("attribut3"<LIKE>ValueString("\"den%\""))}"#;
+        // assert_eq!(EXPECTED, sql);
     }
 
 }
