@@ -11,18 +11,19 @@ use commons_pg::sql_transaction_async::{
     SQLChangeAsync, SQLConnectionAsync, SQLQueryBlockAsync, SQLTransactionAsync,
 };
 use commons_services::key_lib::fetch_customer_key;
-use commons_services::property_name::{TIKA_SERVER_HOSTNAME_PROPERTY, TIKA_SERVER_PORT_PROPERTY};
 use commons_services::session_lib::valid_sid_get_session;
 use commons_services::token_lib::SessionToken;
 use commons_services::try_or_return;
 use commons_services::x_request_id::{Follower, XRequestID};
 use dkconfig::properties::get_prop_value;
+use dkconfig::property_name::{TIKA_SERVER_HOSTNAME_PROPERTY, TIKA_SERVER_PORT_PROPERTY};
+use dkcrypto::dk_crypto::CypherMode::CC20;
 use dkcrypto::dk_crypto::DkEncrypt;
+use dkdto::error_codes::{INTERNAL_DATABASE_ERROR, INTERNAL_TECHNICAL_ERROR};
 use dkdto::{
     DeleteFullTextRequest, ErrorSet, FullTextReply, FullTextRequest, SimpleMessage, WebType,
     WebTypeBuilder,
 };
-use dkdto::error_codes::{INTERNAL_DATABASE_ERROR, INTERNAL_TECHNICAL_ERROR};
 use doka_cli::async_request_client::TikaServerClientAsync;
 use doka_cli::request_client::TokenType;
 
@@ -55,7 +56,7 @@ impl FullTextDelegate {
         }
     }
 
-    /// ✨ Delete the information linked to the document full text indexing information
+    /// 🌟 Delete the information linked to the document full text indexing information
     /// Service called from the file-server
     pub async fn delete_text_indexing(
         mut self,
@@ -123,7 +124,7 @@ impl FullTextDelegate {
         Ok(())
     }
 
-    /// ✨ Parse the raw text data and create the document parts
+    /// 🌟 Parse the raw text data and create the document parts
     /// Service called from the file-server
     pub async fn fulltext_indexing(
         mut self,
@@ -349,9 +350,12 @@ impl FullTextDelegate {
             &self.follower
         );
 
-        let words_encrypted = DkEncrypt::encrypt_str(words_text, customer_key).map_err(
-            err_fwd!("Cannot encrypt the words, follower=[{}]", &self.follower),
-        )?;
+        let words_encrypted = DkEncrypt::new(CC20)
+            .encrypt_str(words_text, customer_key)
+            .map_err(err_fwd!(
+                "Cannot encrypt the words, follower=[{}]",
+                &self.follower
+            ))?;
 
         let tsv = self
             .select_tsvector(&mut trans, Some(lang), words_text)

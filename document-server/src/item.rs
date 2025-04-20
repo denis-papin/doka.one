@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::ops::Deref;
+use std::str::FromStr;
 use std::time::SystemTime;
 
 use anyhow::anyhow;
@@ -26,13 +27,12 @@ use dkdto::error_codes::{
 };
 use dkdto::{
     AddItemReply, AddItemRequest, AddItemTagReply, AddItemTagRequest, AddTagRequest, AddTagValue,
-    EnumTagValue, ErrorSet, GetItemReply, ItemElement, SimpleMessage, TagValueElement,
-    WebTypeBuilder, TAG_TYPE_BOOL, TAG_TYPE_DATE, TAG_TYPE_DATETIME, TAG_TYPE_DOUBLE, TAG_TYPE_INT,
-    TAG_TYPE_LINK, TAG_TYPE_STRING,
+    EnumTagValue, ErrorSet, GetItemReply, ItemElement, SimpleMessage, TagType, TagValueElement,
+    WebTypeBuilder,
 };
 use doka_cli::request_client::TokenType;
 
-use crate::filter_ast::{analyse_expression, to_sql_form, FilterExpressionAST};
+use crate::filter::{analyse_expression, to_sql_form, FilterExpressionAST};
 use crate::{TagDelegate, WebType};
 
 pub(crate) struct ItemDelegate {
@@ -52,7 +52,7 @@ impl ItemDelegate {
     }
 
     ///
-    /// ✨ Find all the items at page [start_page]
+    /// 🌟 Find all the items at page [start_page]
     ///
     pub async fn search_item(
         mut self,
@@ -80,8 +80,9 @@ impl ItemDelegate {
                     panic!("Cannot lex the expression");
                 }
             };
+
         let s = to_sql_form(&filter_tokens.deref()).unwrap(); // TODO
-        println!("sql = {:}", &s);
+        log_info!("sql = {}", &s);
 
         // let r_lexemes = filter_lexer::lex3(&filters.0);
         // // Normalise !!!
@@ -147,7 +148,7 @@ impl ItemDelegate {
     }
 
     /// Deprecated - replace it with search_item
-    /// ✨ Find all the items at page [start_page]
+    /// 🌟 Find all the items at page [start_page]
     ///
     pub async fn get_all_item(
         mut self,
@@ -410,43 +411,50 @@ impl ItemDelegate {
                 .get_int("item_id")
                 .ok_or(anyhow!("Wrong item id"))?;
 
-            let r_value = match tag_type.to_lowercase().as_str() {
-                TAG_TYPE_STRING => {
-                    let value_string = sql_result.get_string("value_string");
-                    Ok(EnumTagValue::String(value_string))
+            let tt = match TagType::from_str(tag_type.to_lowercase().as_str()) {
+                Ok(v) => v,
+                Err(_) => {
+                    return Err(anyhow!(format!(
+                        "Wrong tag type, [{}]",
+                        tag_type.to_lowercase().as_str()
+                    )));
                 }
-                TAG_TYPE_LINK => {
+            };
+
+            let value = match tt {
+                TagType::Text => {
                     let value_string = sql_result.get_string("value_string");
-                    Ok(EnumTagValue::Link(value_string))
+                    EnumTagValue::Text(value_string)
                 }
-                TAG_TYPE_BOOL => {
+                TagType::Link => {
+                    let value_string = sql_result.get_string("value_string");
+                    EnumTagValue::Link(value_string)
+                }
+                TagType::Bool => {
                     let value_boolean = sql_result.get_bool("value_boolean");
-                    Ok(EnumTagValue::Boolean(value_boolean))
+                    EnumTagValue::Boolean(value_boolean)
                 }
-                TAG_TYPE_INT => {
+                TagType::Int => {
                     let value_integer = sql_result.get_int("value_integer");
-                    Ok(EnumTagValue::Integer(value_integer))
+                    EnumTagValue::Integer(value_integer)
                 }
-                TAG_TYPE_DOUBLE => {
+                TagType::Double => {
                     let value_double = sql_result.get_double("value_double");
-                    Ok(EnumTagValue::Double(value_double))
+                    EnumTagValue::Double(value_double)
                 }
-                TAG_TYPE_DATE => {
+                TagType::Date => {
                     // Changed to simply get the naive date and change it to iso string, no need of "Date"
                     let value_naivedate = sql_result.get_naivedate("value_date");
                     //let value_date = sql_result.get_naivedate_as_date("value_date");
                     let opt_iso_d_str = value_naivedate.as_ref().map(|x| naivedate_to_iso(x));
-                    Ok(EnumTagValue::SimpleDate(opt_iso_d_str))
+                    EnumTagValue::SimpleDate(opt_iso_d_str)
                 }
-                TAG_TYPE_DATETIME => {
+                TagType::DateTime => {
                     let value_datetime = sql_result.get_timestamp_as_datetime("value_datetime");
                     let opt_iso_dt_str = value_datetime.as_ref().map(|x| date_time_to_iso(x));
-                    Ok(EnumTagValue::DateTime(opt_iso_dt_str))
+                    EnumTagValue::DateTime(opt_iso_dt_str)
                 }
-                v => Err(anyhow!(format!("Wrong tag type, [{}]", v))),
             };
-
-            let value = r_value.map_err(tr_fwd!())?;
 
             let tv = TagValueElement {
                 tag_value_id,
@@ -462,7 +470,7 @@ impl ItemDelegate {
     }
 
     ///
-    /// ✨ Find an item from its item id
+    /// 🌟 Find an item from its item id
     ///
     pub async fn get_item(mut self, item_id: i64) -> WebType<GetItemReply> {
         // Done in the delegate constructor : self.follower.x_request_id = self.follower.x_request_id.new_if_null();
@@ -566,7 +574,7 @@ impl ItemDelegate {
     }
 
     ///
-    /// ✨ Delegate for delete_item_tag
+    /// 🌟 Delegate for delete_item_tag
     ///
     pub async fn delete_item_tag(
         mut self,
@@ -715,7 +723,7 @@ impl ItemDelegate {
     // }
 
     ///
-    /// ✨ Delegate for add_item_tag
+    /// 🌟 Delegate for add_item_tag
     ///
     pub async fn update_item_tag(
         mut self,
@@ -795,34 +803,8 @@ impl ItemDelegate {
         )
     }
 
-    // // TODO deprecated
-    // #[deprecated]
-    // fn valid_sid_get_session(&mut self) -> Result<String, ErrorSet<'static>> {
-    //     // Check if the token is valid
-    //     if !self.session_token.is_valid() {
-    //         log_error!(
-    //             "💣 Invalid session token, token=[{:?}], follower=[{}]",
-    //             &self.session_token,
-    //             &self.follower
-    //         );
-    //         return Err(&INVALID_TOKEN);
-    //         // return Json(AddItemReply::invalid_token_error_reply());
-    //     }
-    //
-    //     self.follower.token_type = TokenType::Sid(self.session_token.0.clone());
-    //
-    //     // Read the session information
-    //     let Ok(entry_session) = fetch_entry_session(&self.follower.token_type.value()).map_err(
-    //         err_fwd!("💣 Session Manager failed, follower=[{}]", &self.follower),
-    //     ) else {
-    //         return Err(&INTERNAL_TECHNICAL_ERROR);
-    //     };
-    //     let customer_code = entry_session.customer_code.as_str();
-    //     Ok(customer_code.to_owned())
-    // }
-
     ///
-    /// ✨ Create an item
+    /// 🌟 Create an item
     ///
     pub async fn add_item(
         mut self,
@@ -1319,13 +1301,13 @@ impl ItemDelegate {
 
     fn enum_tag_value_to_tag_type(prop: &AddTagValue) -> String {
         match prop.value {
-            EnumTagValue::String(_) => TAG_TYPE_STRING,
-            EnumTagValue::Boolean(_) => TAG_TYPE_BOOL,
-            EnumTagValue::Integer(_) => TAG_TYPE_INT,
-            EnumTagValue::Double(_) => TAG_TYPE_DOUBLE,
-            EnumTagValue::SimpleDate(_) => TAG_TYPE_DATE,
-            EnumTagValue::DateTime(_) => TAG_TYPE_DATETIME,
-            EnumTagValue::Link(_) => TAG_TYPE_LINK,
+            EnumTagValue::Text(_) => TagType::Text.as_str(),
+            EnumTagValue::Boolean(_) => TagType::Bool.as_str(),
+            EnumTagValue::Integer(_) => TagType::Int.as_str(),
+            EnumTagValue::Double(_) => TagType::Double.as_str(),
+            EnumTagValue::SimpleDate(_) => TagType::Date.as_str(),
+            EnumTagValue::DateTime(_) => TagType::DateTime.as_str(),
+            EnumTagValue::Link(_) => TagType::Link.as_str(),
         }
         .to_string()
     }
@@ -1390,7 +1372,7 @@ impl ItemDelegate {
         params.insert("p_value_datetime".to_string(), CellValue::SystemTime(None));
 
         match &tag.value {
-            EnumTagValue::String(tv) => {
+            EnumTagValue::Text(tv) => {
                 params.insert("p_value_string".to_string(), CellValue::String(tv.clone()));
             }
             EnumTagValue::Boolean(tv) => {

@@ -11,12 +11,12 @@ use commons_pg::sql_transaction::CellValue;
 use commons_pg::sql_transaction_async::{
     SQLConnectionAsync, SQLQueryBlockAsync, SQLTransactionAsync,
 };
-use commons_services::property_name::{
-    COMMON_EDIBLE_KEY_PROPERTY, SESSION_MANAGER_HOSTNAME_PROPERTY, SESSION_MANAGER_PORT_PROPERTY,
-};
+
 use commons_services::try_or_return;
 use commons_services::x_request_id::{Follower, XRequestID};
 use dkconfig::properties::get_prop_value;
+use dkconfig::property_name::{COMMON_EDIBLE_KEY_PROPERTY, SESSION_MANAGER_HOSTNAME_PROPERTY, SESSION_MANAGER_PORT_PROPERTY};
+use dkcrypto::dk_crypto::CypherMode::CC20;
 use dkcrypto::dk_crypto::DkEncrypt;
 use dkdto::error_codes::{
     INTERNAL_DATABASE_ERROR, INTERNAL_TECHNICAL_ERROR, INVALID_CEK, INVALID_TOKEN,
@@ -67,10 +67,13 @@ impl LoginDelegate {
         };
 
         // let-else
-        let Ok(session_id) = DkEncrypt::encrypt_str(&clear_session_id, &cek).map_err(err_fwd!(
-            "💣 Cannot encrypt the session id, follower=[{}]",
-            &self.follower
-        )) else {
+        let Ok(session_id) = DkEncrypt::new(CC20)
+            .encrypt_str(&clear_session_id, &cek)
+            .map_err(err_fwd!(
+                "💣 Cannot encrypt the session id, follower=[{}]",
+                &self.follower
+            ))
+        else {
             return WebType::from_errorset(&INVALID_TOKEN);
         };
 

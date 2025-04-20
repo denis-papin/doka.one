@@ -9,14 +9,14 @@ use serde_derive::{Deserialize, Serialize};
 
 use commons_error::*;
 use commons_pg::sql_transaction_async::init_db_pool_async;
-use commons_services::property_name::{
-    COMMON_EDIBLE_KEY_PROPERTY, LOG_CONFIG_FILE_PROPERTY, SERVER_PORT_PROPERTY,
-};
 use commons_services::read_cek_and_store;
 use commons_services::token_lib::SessionToken;
 use commons_services::x_request_id::XRequestID;
 use dkconfig::conf_reader::{read_config, read_doka_env};
 use dkconfig::properties::{get_prop_pg_connect_string, get_prop_value, set_prop_values};
+use dkconfig::property_name::{
+    COMMON_EDIBLE_KEY_PROPERTY, LOG_CONFIG_FILE_PROPERTY, SERVER_PORT_PROPERTY,
+};
 use dkdto::{
     AddItemReply, AddItemRequest, AddItemTagReply, AddItemTagRequest, AddTagReply, AddTagRequest,
     DeleteFullTextRequest, FullTextReply, FullTextRequest, GetItemReply, GetTagReply,
@@ -28,9 +28,7 @@ use crate::item::ItemDelegate;
 use crate::tag::TagDelegate;
 
 mod char_lib;
-mod filter_ast;
-mod filter_lexer;
-mod filter_normalizer;
+mod filter;
 mod ft_tokenizer;
 mod fulltext;
 mod item;
@@ -43,24 +41,8 @@ pub struct PageQuery {
     pub page_size: Option<u32>,
 }
 
-pub async fn toto() -> WebType<GetItemReply> {
-    // let delegate = ItemDelegate::new(session_token, XRequestID::from_value(None));
-    // delegate
-    //     .get_all_item(/*page.start_page, page.page_size*/ None, None)
-    //     .await
-
-    log_info!(">>> hey !");
-
-    WebType::from_simple(
-        200,
-        SimpleMessage {
-            message: "oh oh oh".to_string(),
-        },
-    )
-}
-
 ///  deprecated
-/// ✨ Find all the items at page [start_page]
+/// 🌟 Find all the items at page [start_page]
 /// **NORM
 ///
 ///#[get("/item?<start_page>&<page_size>")]
@@ -80,7 +62,7 @@ pub struct SearchQuery {
 }
 
 ///
-/// ✨ Find all the items at page [start_page]
+/// 🌟 Find all the items at page [start_page]
 /// **NORM
 ///
 /// #[get("/search?<start_page>&<page_size>&<filters>")]
@@ -109,7 +91,7 @@ pub async fn search_item(
 }
 
 ///
-/// ✨  Find a item from its item id
+/// 🌟  Find a item from its item id
 /// **NORM
 ///
 /// #[get("/item/<item_id>")]
@@ -122,7 +104,7 @@ pub(crate) async fn get_item(
 }
 
 ///
-/// ✨ Create an item and all its tags
+/// 🌟 Create an item and all its tags
 ///     A tag can be existing or not
 /// **NORM
 ///
@@ -136,7 +118,7 @@ pub(crate) async fn add_item(
 }
 
 ///
-/// ✨ Update tags on an existing item
+/// 🌟 Update tags on an existing item
 ///     Tags can be already existing in the system.
 ///
 /// ```
@@ -163,7 +145,7 @@ pub struct DeleteTagsQuery {
 }
 
 ///
-/// ✨ Update tags on an existing item
+/// 🌟 Update tags on an existing item
 ///     Tags can be already existing in the system.
 ///
 ///  DELETE /api/documents/{item_id}/tags?tag_names=tag1,tag2,tag3
@@ -181,7 +163,7 @@ pub(crate) async fn delete_item_tag(
 type Type = GetTagReply;
 
 ///
-/// ✨ Find all the existing tags by pages
+/// 🌟 Find all the existing tags by pages
 /// **NORM
 ///
 /// #[get("/tag?<start_page>&<page_size>")]
@@ -194,7 +176,7 @@ pub(crate) async fn get_all_tag(
 }
 
 ///
-/// ✨ Delete a tag
+/// 🌟 Delete a tag
 /// **NORM
 ///
 /// #[delete("/tag/<tag_id>")]
@@ -207,7 +189,7 @@ pub(crate) async fn delete_tag(
 }
 
 ///
-/// ✨ Create a new tag
+/// 🌟 Create a new tag
 /// **NORM
 ///
 /// #[post("/tag", format = "application/json", data = "<add_tag_request>")]
@@ -220,7 +202,7 @@ pub(crate) async fn add_tag(
 }
 
 ///
-/// ✨ Parse the raw text data and create the document parts
+/// 🌟 Parse the raw text data and create the document parts
 /// Used from file-server
 /// **NORM
 ///
@@ -241,7 +223,7 @@ pub(crate) async fn fulltext_indexing(
     delegate.fulltext_indexing(raw_text_request).await
 }
 
-/// ✨ Delete the information linked to the document full text indexing information
+/// 🌟 Delete the information linked to the document full text indexing information
 /// Used from file-server
 /// **NORM
 ///
@@ -275,7 +257,11 @@ async fn main() {
         PROJECT_CODE, VAR_NAME
     );
 
-    let props = read_config(PROJECT_CODE, &read_doka_env(&VAR_NAME));
+    let props = read_config(
+        PROJECT_CODE,
+        &read_doka_env(&VAR_NAME),
+        &Some("DOKA_CLUSTER_PROFILE".to_string()),
+    );
 
     set_prop_values(props);
 
@@ -346,7 +332,6 @@ async fn main() {
         .route("/tag", post(add_tag))
         .route("/tag/:tag_id", delete(delete_tag))
         .route("/fulltext_indexing", post(fulltext_indexing))
-        .route("/toto", get(toto))
         .route("/delete_text_indexing", post(delete_text_indexing));
 
     let app = Router::new().nest(&base_url, key_routes);

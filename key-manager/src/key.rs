@@ -10,11 +10,12 @@ use commons_pg::sql_transaction::{CellValue, SQLDataSet};
 use commons_pg::sql_transaction_async::{
     SQLChangeAsync, SQLConnectionAsync, SQLQueryBlockAsync, SQLTransactionAsync,
 };
-use commons_services::property_name::COMMON_EDIBLE_KEY_PROPERTY;
 use commons_services::token_lib::SecurityToken;
 use commons_services::try_or_return;
 use commons_services::x_request_id::{Follower, XRequestID};
 use dkconfig::properties::get_prop_value;
+use dkconfig::property_name::COMMON_EDIBLE_KEY_PROPERTY;
+use dkcrypto::dk_crypto::CypherMode::CC20;
 use dkcrypto::dk_crypto::DkEncrypt;
 use dkdto::error_codes::{
     CUSTOMER_KEY_ALREADY_EXISTS, INTERNAL_DATABASE_ERROR, INTERNAL_TECHNICAL_ERROR, INVALID_CEK,
@@ -44,7 +45,7 @@ impl KeyDelegate {
     }
 
     ///
-    /// ✨ Add a key for customer code [customer]
+    /// 🌟 Add a key for customer code [customer]
     ///
     pub async fn add_key(&mut self, customer: Json<AddKeyRequest>) -> WebType<AddKeyReply> {
         log_info!(
@@ -74,10 +75,13 @@ impl KeyDelegate {
 
         let new_customer_key = DkEncrypt::generate_random_key();
 
-        let Ok(enc_password) = DkEncrypt::encrypt_str(&new_customer_key, &cek).map_err(err_fwd!(
-            "💣 Cannot encrypt the new key, follower=[{}]",
-            &self.follower
-        )) else {
+        let Ok(enc_password) = DkEncrypt::new(CC20)
+            .encrypt_str(&new_customer_key, &cek)
+            .map_err(err_fwd!(
+                "💣 Cannot encrypt the new key, follower=[{}]",
+                &self.follower
+            ))
+        else {
             return WebType::from_errorset(&&INTERNAL_TECHNICAL_ERROR);
         };
 
@@ -238,7 +242,7 @@ impl KeyDelegate {
     }
 
     ///
-    /// ✨ Read the key for a specific customer code [customer_code]
+    /// 🌟 Read the key for a specific customer code [customer_code]
     ///
     pub async fn read_key(&mut self, customer_code: &str) -> WebType<CustomerKeyReply> {
         log_info!(
@@ -282,7 +286,7 @@ impl KeyDelegate {
     }
 
     ///
-    /// ✨ Read all the keys
+    /// 🌟 Read all the keys
     ///
     pub async fn key_list(&mut self) -> WebType<CustomerKeyReply> {
         log_info!("🚀 Start key list api, follower=[{}]", &self.follower);
