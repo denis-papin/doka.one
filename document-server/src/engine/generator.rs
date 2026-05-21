@@ -1,4 +1,5 @@
 use crate::filter::filter_ast::{ComparisonOperator, FilterCondition, FilterExpressionAST, FilterValue};
+use crate::filter::to_sql_literal;
 use axum::async_trait;
 use commons_error::tr_fwd;
 use commons_error::*;
@@ -227,10 +228,23 @@ fn build_tag_value_filter(filter_condition: &FilterCondition, tag_type: &TagType
 
     let tag_value_filter = match tag_type {
         TagType::Text => {
-            //unaccent_lower((tv.value_string)::text) LIKE unaccent_lower('ab%')
-            let value = &filter_condition.value.to_string();
-            dbg!(&value);
-            format!("unaccent_lower((tv.value_string)::text) {0} unaccent_lower('{1}')", &sql_op, value)
+            // F0003: route the value literal through `to_sql_literal` (F0002),
+            // then wrap the quoted body in `unaccent_lower(...)`, keeping any
+            // trailing ` ESCAPE '\'` clause OUTSIDE the wrapping — the
+            // ESCAPE clause attaches to the LIKE, not to the function call.
+            //
+            // Examples:
+            //   to_sql_literal -> `'den%'`              => unaccent_lower('den%')
+            //   to_sql_literal -> `'50\%' ESCAPE '\'`   => unaccent_lower('50\%') ESCAPE '\'
+            let literal = to_sql_literal(&filter_condition.value, &filter_condition.operator);
+            let (wrapped_body, escape_suffix) = match literal.find(" ESCAPE '") {
+                Some(pos) => (&literal[..pos], &literal[pos..]),
+                None => (literal.as_str(), ""),
+            };
+            format!(
+                "unaccent_lower((tv.value_string)::text) {0} unaccent_lower({1}){2}",
+                &sql_op, wrapped_body, escape_suffix
+            )
         }
         TagType::Bool => match (&filter_condition.operator, &filter_condition.value) {
             (ComparisonOperator::EQ, FilterValue::ValueBool(true)) => "tv.value_boolean = TRUE".to_string(),
