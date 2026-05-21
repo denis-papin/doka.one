@@ -1,4 +1,5 @@
 use crate::filter::filter_ast::{ComparisonOperator, FilterCondition, FilterExpressionAST, FilterValue};
+use crate::filter::to_sql_literal;
 use axum::async_trait;
 use commons_error::tr_fwd;
 use commons_error::*;
@@ -55,6 +56,7 @@ pub(crate) struct ConditionStatQuery {
     pub(crate) value_repr: String,
     pub(crate) occurrence: u32,
     pub(crate) count_sql: String,
+    pub(crate) benchmark_sql: String,
 }
 
 #[derive(Debug, Clone)]
@@ -226,10 +228,23 @@ fn build_tag_value_filter(filter_condition: &FilterCondition, tag_type: &TagType
 
     let tag_value_filter = match tag_type {
         TagType::Text => {
-            //unaccent_lower((tv.value_string)::text) LIKE unaccent_lower('ab%')
-            let value = &filter_condition.value.to_string();
-            dbg!(&value);
-            format!("unaccent_lower((tv.value_string)::text) {0} unaccent_lower('{1}')", &sql_op, value)
+            // F0003: route the value literal through `to_sql_literal` (F0002),
+            // then wrap the quoted body in `unaccent_lower(...)`, keeping any
+            // trailing ` ESCAPE '\'` clause OUTSIDE the wrapping — the
+            // ESCAPE clause attaches to the LIKE, not to the function call.
+            //
+            // Examples:
+            //   to_sql_literal -> `'den%'`              => unaccent_lower('den%')
+            //   to_sql_literal -> `'50\%' ESCAPE '\'`   => unaccent_lower('50\%') ESCAPE '\'
+            let literal = to_sql_literal(&filter_condition.value, &filter_condition.operator);
+            let (wrapped_body, escape_suffix) = match literal.find(" ESCAPE '") {
+                Some(pos) => (&literal[..pos], &literal[pos..]),
+                None => (literal.as_str(), ""),
+            };
+            format!(
+                "unaccent_lower((tv.value_string)::text) {0} unaccent_lower({1}){2}",
+                &sql_op, wrapped_body, escape_suffix
+            )
         }
         TagType::Bool => match (&filter_condition.operator, &filter_condition.value) {
             (ComparisonOperator::EQ, FilterValue::ValueBool(true)) => "tv.value_boolean = TRUE".to_string(),
@@ -426,7 +441,7 @@ pub(crate) async fn compile_search_query<T: TagDefinitionInterface>(
         list_of_query_tags.push(query_tag);
 
         // Add the stats related to the filter condition
-        condition_stats.push(build_condition_stat_query(fc, *occurrence, &tag_value_filter));
+        condition_stats.push(build_condition_stat_query(fc, tag_type, *occurrence, &tag_value_filter));
     }
 
     // build the query filter aka boolean filter
@@ -480,6 +495,8 @@ pub(crate) async fn compile_search_query<T: TagDefinitionInterface>(
     for condition_stat in &mut condition_stats {
         condition_stat.count_sql =
             condition_stat.count_sql.replace("{customer_schema}", format!("cs_{}", customer_code).as_str());
+        condition_stat.benchmark_sql =
+            condition_stat.benchmark_sql.replace("{customer_schema}", format!("cs_{}", customer_code).as_str());
     }
 
     Ok(CompiledSearchQuery { main_sql: sql_query, condition_stats })
@@ -533,6 +550,7 @@ fn build_query_tag(
 
 fn build_condition_stat_query(
     filter_condition: &FilterCondition,
+    tag_type: &TagType,
     occurrence: u32,
     tag_value_filter: &str,
 ) -> ConditionStatQuery {
@@ -546,6 +564,18 @@ JOIN {{customer_schema}}.tag_value tv ON
         &filter_condition.attribute, tag_value_filter
     );
 
+    let benchmark_sql = format!(
+        r#"SELECT tv.{} as value
+FROM {{customer_schema}}.tag_definition td
+JOIN {{customer_schema}}.tag_value tv ON
+    tv.tag_id = td.id
+    AND td."name" = '{}'
+    AND {}"#,
+        tag_type.value_column_name(),
+        &filter_condition.attribute,
+        tag_value_filter
+    );
+
     ConditionStatQuery {
         condition_key: filter_condition.key.clone(),
         attribute: filter_condition.attribute.clone(),
@@ -553,6 +583,7 @@ JOIN {{customer_schema}}.tag_value tv ON
         value_repr: filter_condition.value.to_string(),
         occurrence,
         count_sql,
+        benchmark_sql,
     }
 }
 

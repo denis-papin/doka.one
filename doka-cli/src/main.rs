@@ -65,8 +65,10 @@ fn extract_option(options: &HashMap<String, Option<String>>, key: &str) -> anyho
     }
 }
 
+const BUILTIN_OBJECTS: &[&str] = &["help", "version", "token", "customer", "session", "item", "file"];
+
 fn is_known_object(commands: &[Command], object: &str) -> bool {
-    commands.iter().any(|command| command.name == object)
+    BUILTIN_OBJECTS.contains(&object) || commands.iter().any(|command| command.name == object)
 }
 
 fn dispatch(params: &Params, commands: &[Command]) -> u16 {
