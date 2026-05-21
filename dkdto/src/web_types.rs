@@ -373,7 +373,10 @@ pub struct BuildQueryConditionStat {
     pub value: String,
     pub occurrence: u32,
     pub count_query: String,
+    pub benchmark_query: String,
     pub matching_item_count: usize,
+    pub benchmark_duration_ms: Option<u64>,
+    pub is_ic: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

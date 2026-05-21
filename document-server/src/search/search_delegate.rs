@@ -25,6 +25,9 @@ use crate::filter::filter_ast::FilterExpressionAST;
 use crate::filter::filter_lexer::FilterError;
 use crate::search::dao::SearchDao;
 
+const IC_COUNT_THRESHOLD: usize = 2_000;
+const IC_TIME_THRESHOLD_MS: u64 = 1_000;
+
 pub(crate) struct SearchDelegate {
     pub session_token: SessionToken,
     pub follower: Follower,
@@ -211,6 +214,19 @@ impl SearchDelegate {
                 return WebType::from_api_error(&INTERNAL_DATABASE_ERROR).into_with_context();
             };
 
+            let benchmark_duration_ms = if matching_item_count < IC_COUNT_THRESHOLD {
+                let Ok(duration_ms) = dao.execute_benchmark_query(&mut trans, &condition_stat_query.benchmark_sql).await else {
+                    log_error!("💣 Cannot execute IC benchmark query, follower=[{}]", &self.follower);
+                    return WebType::from_api_error(&INTERNAL_DATABASE_ERROR).into_with_context();
+                };
+                Some(duration_ms)
+            } else {
+                None
+            };
+
+            let is_ic = matching_item_count < IC_COUNT_THRESHOLD
+                && benchmark_duration_ms.is_some_and(|duration_ms| duration_ms < IC_TIME_THRESHOLD_MS);
+
             condition_stats.push(BuildQueryConditionStat {
                 condition_key: condition_stat_query.condition_key.clone(),
                 attribute: condition_stat_query.attribute.clone(),
@@ -218,7 +234,10 @@ impl SearchDelegate {
                 value: condition_stat_query.value_repr.clone(),
                 occurrence: condition_stat_query.occurrence,
                 count_query: condition_stat_query.count_sql.clone(),
+                benchmark_query: condition_stat_query.benchmark_sql.clone(),
                 matching_item_count,
+                benchmark_duration_ms,
+                is_ic,
             });
         }
 
