@@ -131,18 +131,26 @@ pub(crate) fn build_query_filter(
             }
         }
         FilterExpressionAST::Logical { operator, leaves } => {
-            content.push_str("(");
+            // F0004 rule 3: an empty Logical is the sentinel "match-all"
+            // AST built by the delegate when no effective filter is
+            // provided. Emit `TRUE` so the surrounding `WHERE\n    <fragment>`
+            // template produces valid SQL.
+            if leaves.is_empty() {
+                content.push_str("TRUE");
+            } else {
+                content.push_str("(");
 
-            for (i, l) in leaves.iter().enumerate() {
-                let r_leaf_content = build_query_filter(l, filter_conditions);
-                if let Ok(leaf) = r_leaf_content {
-                    content.push_str(&leaf);
+                for (i, l) in leaves.iter().enumerate() {
+                    let r_leaf_content = build_query_filter(l, filter_conditions);
+                    if let Ok(leaf) = r_leaf_content {
+                        content.push_str(&leaf);
+                    }
+                    if i < leaves.len() - 1 {
+                        content.push_str(&format!(" {:?} ", &operator));
+                    }
                 }
-                if i < leaves.len() - 1 {
-                    content.push_str(&format!(" {:?} ", &operator));
-                }
+                content.push_str(")");
             }
-            content.push_str(")");
         }
     }
     Ok(content)
@@ -382,17 +390,23 @@ pub(crate) async fn compile_search_query<T: TagDefinitionInterface>(
 
     dbg!(&tags);
 
-    // Find the tag_definitions for the tags used in the filter and in the order by
+    // Find the tag_definitions for the tags used in the filter and in the order by.
+    // F0004: when both the filter AST and order_tags are empty (the "match-all"
+    // case with no ordering), skip the lookup — `search_tags_by_names` builds
+    // an invalid `WHERE name IN ` when given an empty list.
     let tags_list: Vec<String> = tags.iter().cloned().collect();
 
-    let definitions =
+    let definitions = if tags_list.is_empty() {
+        vec![]
+    } else {
         match tag_definition_builder.get_tag_definition(&tags_list, customer_code).await.map_err(tr_fwd!()) {
             Ok(definitions) => definitions,
             Err(e) => {
                 log_error!("Error while getting tag definitions: {:?}", e);
                 return Err(GenerationError::TagSearchError("Error in tag search".to_string()));
             }
-        };
+        }
+    };
 
     dbg!(&definitions);
 
@@ -442,6 +456,31 @@ pub(crate) async fn compile_search_query<T: TagDefinitionInterface>(
 
         // Add the stats related to the filter condition
         condition_stats.push(build_condition_stat_query(fc, tag_type, *occurrence, &tag_value_filter));
+    }
+
+    // F0004 rule 4: order_tags that are not already covered by a filter
+    // condition need a synthetic LEFT OUTER JOIN with `AND TRUE`, so the
+    // `ot_<tag>_0.value` reference in the ORDER BY clause resolves.
+    for order_tag in order_tags.iter() {
+        if map_of_tags_with_occurrence.contains_key(order_tag) {
+            continue;
+        }
+        let tag_type = definitions
+            .iter()
+            .find(|def| &def.tag_names == order_tag)
+            .map(|def| &def.tag_type)
+            .unwrap();
+
+        let synthetic_join = QUERY_FILTER_TEMPLATE
+            .replace("{{value_column_name}}", tag_type.value_column_name())
+            .replace("{{tag_name}}", order_tag)
+            .replace("{{tag_value_filter}}", "AND TRUE")
+            .replace("{{tag_super_filter}}", "")
+            .replace("{{occurence}}", "0");
+
+        let tag_occurrence = format!("ot_{}_{}", order_tag, 0);
+        map_of_tags_with_occurrence.entry(order_tag.clone()).or_insert_with(Vec::new).push(tag_occurrence);
+        list_of_query_tags.push(synthetic_join);
     }
 
     // build the query filter aka boolean filter
