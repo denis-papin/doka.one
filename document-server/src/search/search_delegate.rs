@@ -22,7 +22,7 @@ use crate::engine::generator::{
 };
 use crate::filter::analyse_expression;
 use crate::filter::filter_ast::FilterExpressionAST;
-use crate::filter::filter_lexer::FilterError;
+use crate::filter::filter_lexer::{FilterError, LogicalOperator};
 use crate::search::dao::SearchDao;
 
 const IC_COUNT_THRESHOLD: usize = 2_000;
@@ -62,11 +62,14 @@ impl SearchDelegate {
 
         log_info!("😎 We fetched the session, follower=[{}]", &self.follower);
 
-        let filter_expression_ast: Box<FilterExpressionAST> =
-            try_or_return!(analyse_expression(filter_expression.as_deref().unwrap_or("()")), |e: FilterError| {
+        let filter_expression_ast: Box<FilterExpressionAST> = match normalize_filter_input(filter_expression.as_deref())
+        {
+            None => empty_match_all_ast(),
+            Some(raw) => try_or_return!(analyse_expression(raw), |e: FilterError| {
                 let c = ContextMessage { message: e.human_error_message(), context: vec![e.char_position.to_string()] };
                 WebTypeWithContext::from_simple(StatusCode::BAD_REQUEST.as_u16(), c)
-            });
+            }),
+        };
 
         let tag_definition_builder = TagDefinitionBuilder::new(self.session_token.clone(), self.follower.clone());
         let select_tags = build_select_tags(&filter_expression_ast, &order_tags.clone().unwrap_or_default());
@@ -143,11 +146,14 @@ impl SearchDelegate {
             Self::web_type_error_ctx()
         );
 
-        let filter_expression_ast: Box<FilterExpressionAST> =
-            try_or_return!(analyse_expression(filter_expression.as_deref().unwrap_or("()")), |e: FilterError| {
+        let filter_expression_ast: Box<FilterExpressionAST> = match normalize_filter_input(filter_expression.as_deref())
+        {
+            None => empty_match_all_ast(),
+            Some(raw) => try_or_return!(analyse_expression(raw), |e: FilterError| {
                 let c = ContextMessage { message: e.human_error_message(), context: vec![e.char_position.to_string()] };
                 WebTypeWithContext::from_simple(StatusCode::BAD_REQUEST.as_u16(), c)
-            });
+            }),
+        };
 
         let tag_definition_builder = TagDefinitionBuilder::new(self.session_token.clone(), self.follower.clone());
         let mut select_tags = build_select_tags(&filter_expression_ast, &order_tags.clone().unwrap_or_default());
@@ -326,4 +332,22 @@ fn extend_select_tags(select_tags: &mut Vec<String>, extra_tags: &[String]) {
             select_tags.push(tag.clone());
         }
     }
+}
+
+/// F0004 rule 1: the four equivalent "no-filter" wire forms — omitted,
+/// empty, whitespace-only, and explicit `()` — collapse to `None`. Any
+/// other value is forwarded to `analyse_expression` unchanged so the
+/// existing 400 contract for malformed input is preserved.
+fn normalize_filter_input(raw: Option<&str>) -> Option<&str> {
+    match raw.map(str::trim) {
+        None | Some("") | Some("()") => None,
+        Some(s) => Some(s),
+    }
+}
+
+/// F0004 rule 2: build the sentinel "match-all" AST without introducing a
+/// new enum variant. `build_query_filter` recognises an empty `Logical`
+/// and emits `TRUE`.
+fn empty_match_all_ast() -> Box<FilterExpressionAST> {
+    Box::new(FilterExpressionAST::Logical { operator: LogicalOperator::AND, leaves: vec![] })
 }
