@@ -8,6 +8,7 @@ use log::error;
 pub(crate) mod filter_ast;
 pub(crate) mod filter_lexer;
 pub(crate) mod filter_normalizer;
+pub(crate) mod type_resolver;
 
 pub(crate) fn analyse_expression(expression: &str) -> Result<Box<FilterExpressionAST>, FilterError> {
     parser_log!("Analysing the expression : {:?}", expression; 5);
@@ -114,6 +115,7 @@ pub(crate) fn to_sql_literal(value: &FilterValue, operator: &ComparisonOperator)
         FilterValue::ValueString(s) => format!("'{}'", s.replace('\'', "''")),
         FilterValue::ValueInt(i) => i.to_string(),
         FilterValue::ValueBool(b) => (if *b { "TRUE" } else { "FALSE" }).to_string(),
+        FilterValue::ValueDate(d) => format!("DATE '{}'", d),
         FilterValue::ValuePattern(parts) => {
             // Defensive: the parser only emits `ValuePattern` paired with `LIKE`.
             let mut joined = String::new();
@@ -492,6 +494,17 @@ mod tests {
             r#"(name == "d'arc") AND (code LIKE "50#%")"#,
             r"((name = 'd''arc') AND (code LIKE '50\%' ESCAPE '\'))",
         );
+    }
+
+    // === UT-F0005 : Date filter — `to_sql_literal` defensive arm ===
+
+    #[test]
+    pub fn ut_f0005_012_to_sql_literal_value_date() {
+        use crate::filter::filter_ast::{ComparisonOperator, FilterValue};
+        use chrono::NaiveDate;
+        let v = FilterValue::ValueDate(NaiveDate::from_ymd_opt(2025, 12, 31).unwrap());
+        let s = super::to_sql_literal(&v, &ComparisonOperator::EQ);
+        assert_eq!("DATE '2025-12-31'", s);
     }
 
     #[test]
