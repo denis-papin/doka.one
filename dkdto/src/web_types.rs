@@ -413,7 +413,7 @@ const TAG_TYPE_DATE: &str = "date";
 const TAG_TYPE_DATETIME: &str = "datetime";
 const TAG_TYPE_LINK: &str = "link";
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum TagType {
     Text,
     Bool,

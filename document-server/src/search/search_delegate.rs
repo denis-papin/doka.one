@@ -18,7 +18,7 @@ use doka_cli::request_client::TokenType;
 
 use crate::engine::generator::{
     GenerationError, SearchSqlGenerationMode, TagDefinition, TagDefinitionBuilder, TagDefinitionInterface,
-    compile_search_query, generate_search_sql,
+    generate_search_sql, generate_sql_from_resolved, resolve_filter,
 };
 use crate::filter::analyse_expression;
 use crate::filter::filter_ast::FilterExpressionAST;
@@ -76,7 +76,7 @@ impl SearchDelegate {
 
         let sql_query = try_or_return!(
             generate_search_sql(
-                &filter_expression_ast,
+                *filter_expression_ast,
                 &tag_definition_builder,
                 &select_tags,
                 &order_tags.unwrap_or(vec![]),
@@ -159,10 +159,25 @@ impl SearchDelegate {
         let mut select_tags = build_select_tags(&filter_expression_ast, &order_tags.clone().unwrap_or_default());
         extend_select_tags(&mut select_tags, build_query_request.extra_properties.as_deref().unwrap_or_default());
 
-        let compiled_query = try_or_return!(
-            compile_search_query(
-                &filter_expression_ast,
+        let (resolved_ast, definitions) = try_or_return!(
+            resolve_filter(
+                *filter_expression_ast,
                 &tag_definition_builder,
+                &order_tags.clone().unwrap_or_default(),
+                &entry_session.customer_code,
+            )
+            .await,
+            |e: GenerationError| {
+                log_error!("💣 Fail to resolve filter for build-query, [{:?}], follower=[{}]", e, &self.follower);
+                let msg = SimpleMessage::from(e.to_string());
+                WebType::from_simple(StatusCode::BAD_REQUEST.as_u16(), msg).into_with_context()
+            }
+        );
+
+        let compiled_query = try_or_return!(
+            generate_sql_from_resolved(
+                resolved_ast,
+                definitions,
                 &select_tags,
                 &order_tags.clone().unwrap_or_default(),
                 SearchSqlGenerationMode::Persisted,
