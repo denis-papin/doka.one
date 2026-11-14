@@ -1,0 +1,20 @@
+flowchart TB
+  U["Unit = .eml + simple meta"]
+  I["Items (after split)\nitem + meta + blobs + tags"]
+  A["Item A"]
+  B["Item B"]
+  C1["Chunks A"]
+  C2["Chunks B"]
+  E1["Vespa"]
+  E2["Embeddings"]
+  PJ1["PJ1 + tags"]
+  PJ2["PJ2 + tags"]
+  U --> I
+  I --> A
+  I --> B
+  A --> C1
+  B --> C2
+  C1 --> E1
+  C2 --> E2
+  A -.-> PJ1
+  B -.-> PJ2

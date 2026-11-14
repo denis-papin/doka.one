@@ -1,0 +1,25 @@
+flowchart TB
+  CLIENT["Doka client / API\n(annotation partiellement illisible)"]
+  UNIT["Units / LX"]
+  S3["S3 (Garage)"]
+  K["Kafka Lite"]
+  SPLIT["Split"]
+  ITEMS["Items"]
+  TIKA["Tika"]
+  LEX["Lexem"]
+  EMB["Embedding"]
+  SMART["Smart Chunk"]
+  TAG["TAG Generation"]
+  V["Vespa - multi node"]
+  CLIENT --> UNIT
+  UNIT --> S3
+  UNIT --> K
+  S3 --> SPLIT
+  SPLIT --> ITEMS
+  K --> TIKA
+  K --> SMART
+  K --> TAG
+  TIKA --> LEX
+  SMART --> EMB
+  EMB --> V
+  TAG --> V
